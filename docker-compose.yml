@@ -1,6 +1,9 @@
+
 services:
   db:
     image: postgres:16-alpine
+    container_name: postapi-db
+    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -8,29 +11,41 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pg-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  api:
+  server:
     build: ./server
     depends_on:
       db:
         condition: service_healthy
     env_file:
-      - ./server/.env
+      - .env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/postapi
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/postapi 
+      PORT: ${PORT:-5000} 
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
-      PORT: ${PORT:-4000}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4173}
     ports:
-      - "${PORT:-4000}:${PORT:-4000}"
+      - "${PORT:-5000}:${PORT:-5000}"
     volumes:
-      - ./uploads:/app/uploads
+      - ./server:/app
 
+  client:
+    build: ./client
+    depends_on:
+      - server
+    env_file:
+      - .env
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:5000}
+    ports:
+      - "4173:4173"
 volumes:
-  pgdata:
+  Pg-data:
+
+ 
