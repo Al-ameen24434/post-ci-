@@ -46,6 +46,6 @@ services:
     ports:
       - "4173:4173"
 volumes:
-  Pg-data:
+  pg-data:
 
  
