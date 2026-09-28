@@ -27,24 +27,25 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/postapi 
-      PORT: ${PORT:-5000} 
+      PORT: ${PORT:-4000} 
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4173}
     ports:
-      - "${PORT:-5000}:${PORT:-5000}"
+      - "${PORT:-4000}:${PORT:-4000}"
     volumes:
       - ./server:/app
+      - /app/node_modules
 
   client:
-    build: ./client
+    build:
+      context: ./client
+      # VITE_API_URL defaults to "" in Dockerfile so the browser uses relative
+      # /api (proxied by nginx to server:4000). To build with an absolute URL:
+      #   docker compose build --build-arg VITE_API_URL=http://localhost:4000 client
     depends_on:
       - server
-    env_file:
-      - .env
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:5000}
     ports:
-      - "4173:4173"
+      - "4173:80"
 volumes:
   pg-data:
 

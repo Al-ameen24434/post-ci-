@@ -9,9 +9,11 @@ export const pool = new Pool({
 
 export const ROWS_PER_PAGE = 10;
 
-// Initialize / migrate schema. Safe to call multiple times.
+// Initialize / migrate schema. Safe to call multiple times - guarded against concurrent calls
+let initPromise = null;
 export async function initDb() {
-  await pool.query(`
+  if (initPromise) return initPromise;
+  initPromise = pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -56,9 +58,11 @@ export async function initDb() {
       UNIQUE(user_id, friend_id)
     );
   `);
+  return initPromise;
 }
 
 // Eager init but don't block import; index.js / tests should await initDb()
+// Guarded via initPromise so concurrent calls from index.js won't race
 initDb().catch((err) => {
   console.error('Failed to init DB', err);
 });
