@@ -9,6 +9,7 @@ DB_USER="postgres"
 DB_PASS="postgres"
 DB_PORT="5432"
 API_PORT="${PORT:-4000}"
+APP_PORT="${APP_PORT:-8080}"
 NODE_MAJOR_MIN=18
 
 info() { echo -e "\033[1;34m[setup]\033[0m $*"; }
@@ -145,11 +146,12 @@ POSTGRES_USER=${DB_USER}
 POSTGRES_PASSWORD=${DB_PASS}
 POSTGRES_DB=${DB_NAME}
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:${DB_PORT}/${DB_NAME}
+APP_PORT=${APP_PORT}
 PORT=${API_PORT}
 JWT_SECRET=dev-secret-change-me
 UPLOAD_DIR=./uploads
 NODE_ENV=development
-CORS_ORIGIN=http://localhost:4173
+CORS_ORIGIN=http://localhost:${APP_PORT}
 VITE_API_URL=
 VITE_PORT=4173
 EOF
@@ -183,29 +185,30 @@ else
 fi
 
 # --- 7. Seed database -----------------------------------------------------------
+# The db port is not published to the host, so seeding runs inside the compose network.
 info "Seeding database..."
-(cd server && node src/seed.js) || \
-  warn "Seeding failed - run 'cd server && npm run seed' manually to check"
+$DC compose run --rm server node src/seed.js || \
+  warn "Seeding failed - run 'docker compose run --rm server node src/seed.js' manually to check"
 
 # --- 8. Done ---------------------------------------------------------------------
 info "Setup complete!"
 cat <<EOF
 
-Next steps (SSH into this machine, then:):
-  1. Run the API:
-       $DC compose up --build server
-     or locally:
-       cd server && npm run dev
+Everything (frontend, API and uploads) is exposed on ONE endpoint - nginx in the
+client container. The API and the database stay on the internal Docker network.
 
-  2. Run the client:
-       $DC compose up --build client      # nginx, port 4173
-     or locally:
-       cd client && npm run dev
+Start the stack:
+  $DC compose up --build -d
 
-  From your local machine, forward ports over SSH:
-     ssh -L 4000:localhost:4000 -L 4173:localhost:4173 user@<instance-ip>
+Endpoint (from this machine):
+  http://localhost:${APP_PORT}
+  http://localhost:${APP_PORT}/api/health
+  http://localhost:${APP_PORT}/uploads/<file>
 
-  API:      http://localhost:${API_PORT}
-  Client:   http://localhost:4173
-  Database: localhost:${DB_PORT} (${DB_NAME})
+From your local machine, forward that single port over SSH:
+  ssh -L ${APP_PORT}:localhost:${APP_PORT} user@<instance-ip>
+  then open http://localhost:${APP_PORT}
+
+Database: internal only (no host port). Reach it from a container, e.g.:
+  $DC compose exec db psql -U ${DB_USER} -d ${DB_NAME}
 EOF

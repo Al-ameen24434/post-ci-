@@ -1,5 +1,4 @@
-node_modues
-dist
-.env
-.git
+node_modules
 npm-debug.log
+uploads
+.env
