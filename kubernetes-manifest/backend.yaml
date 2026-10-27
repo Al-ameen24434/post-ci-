@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: post-api
+  labels:
+    app: backend
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: postapi/server:latest
+          ports:
+            - containerPort: 4000
+          env:
+            - name: PORT
+              value: "4000"
+            - name: NODE_ENV
+              value: production
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: post-api-secret
+                  key: DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: post-api-secret
+                  key: JWT_SECRET
+            - name: CORS_ORIGIN
+              value: "*"
+            - name: UPLOAD_DIR
+              value: /app/uploads
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: uploads-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uploads-pvc
+  namespace: post-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: post-api
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 4000
+      targetPort: 4000
+      protocol: TCP
+  type: ClusterIP
