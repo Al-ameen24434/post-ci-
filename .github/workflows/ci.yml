@@ -1,0 +1,265 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Required repository secrets (security jobs skip gracefully when not set):
+#   SNYK_TOKEN      - https://snyk.io  (dependency, Docker and IaC scans)
+#   SONAR_TOKEN     - SonarQube/SonarCloud token (static analysis)
+#   SONAR_HOST_URL  - https://sonarcloud.io or your SonarQube server URL
+#
+# Security checks in this workflow:
+#   - npm audit            (dependency vulnerabilities, server + client)
+#   - Trivy fs             (vulnerabilities, hardcoded secrets, IaC misconfig)
+#   - Trivy image          (OS + library CVEs in built Docker images)
+#   - Snyk                 (dependencies, Docker images, Kubernetes manifests)
+#   - SonarQube/SonarCloud (static code analysis)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build + unit/API tests for the Express API (requires PostgreSQL)
+  # ---------------------------------------------------------------------------
+  server-test:
+    name: Server tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postapi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Run tests
+        working-directory: server
+        run: npm test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postapi
+          JWT_SECRET: ci-only-not-a-real-secret
+          CORS_ORIGIN: http://localhost:5173
+
+      - name: Dependency vulnerability check (npm audit)
+        working-directory: server
+        run: npm audit --audit-level=high
+
+  # ---------------------------------------------------------------------------
+  # Build the React/Vite client
+  # ---------------------------------------------------------------------------
+  client-build:
+    name: Client build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build
+        working-directory: client
+        run: npm run build
+
+      - name: Dependency vulnerability check (npm audit)
+        working-directory: client
+        run: npm audit --audit-level=high
+
+  # ---------------------------------------------------------------------------
+  # Trivy filesystem scan: CVEs, hardcoded secrets, IaC misconfigurations
+  # (docker-compose.yml and kubernetes-manifest/)
+  # ---------------------------------------------------------------------------
+  trivy:
+    name: Trivy (vulns / secrets / IaC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+
+  # ---------------------------------------------------------------------------
+  # Build Docker images once, scan them with Trivy and Snyk
+  # ---------------------------------------------------------------------------
+  docker-scan:
+    name: Docker build + image scan
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      SERVER_IMAGE: post-api-server:${{ github.sha }}
+      CLIENT_IMAGE: post-api-client:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Snyk token
+        id: snyk
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SNYK_TOKEN not set - skipping Snyk image scan"
+          fi
+
+      - name: Build server image
+        run: docker build -t "$SERVER_IMAGE" ./server
+
+      - name: Build client image
+        run: docker build -t "$CLIENT_IMAGE" ./client
+
+      - name: Trivy scan - server image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.SERVER_IMAGE }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Trivy scan - client image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.CLIENT_IMAGE }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Snyk scan - server image
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/docker@v1.0.0
+        with:
+          image: ${{ env.SERVER_IMAGE }}
+          args: --severity-threshold=high
+
+      - name: Snyk scan - client image
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/docker@v1.0.0
+        with:
+          image: ${{ env.CLIENT_IMAGE }}
+          args: --severity-threshold=high
+
+  # ---------------------------------------------------------------------------
+  # Snyk: open-source dependencies + Kubernetes IaC (skipped without token)
+  # ---------------------------------------------------------------------------
+  snyk:
+    name: Snyk (deps / IaC)
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Snyk token
+        id: snyk
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SNYK_TOKEN not set - skipping Snyk scans"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.snyk.outputs.enabled == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies (server)
+        if: steps.snyk.outputs.enabled == 'true'
+        working-directory: server
+        run: npm ci
+
+      - name: Install dependencies (client)
+        if: steps.snyk.outputs.enabled == 'true'
+        working-directory: client
+        run: npm ci
+
+      - name: Snyk dependency scan
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/node@v1.0.0
+        with:
+          args: --all-projects --severity-threshold=high
+
+      - name: Snyk IaC scan (Kubernetes)
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/iac@v1.0.0
+        with:
+          file: kubernetes-manifest/
+
+  # ---------------------------------------------------------------------------
+  # SonarQube / SonarCloud static analysis (skipped without token)
+  # ---------------------------------------------------------------------------
+  sonar:
+    name: SonarQube analysis
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for blame / new-code detection
+
+      - name: Check Sonar token
+        id: sonar
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SONAR_TOKEN not set - skipping SonarQube analysis"
+          fi
+
+      - name: SonarQube scan
+        if: steps.sonar.outputs.enabled == 'true'
+        uses: SonarSource/sonarqube-scan-action@v8.5.0
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
