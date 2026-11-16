@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "24"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ jobs:
   # ---------------------------------------------------------------------------
   server-test:
     name: Server tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -51,9 +51,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -81,11 +81,11 @@ jobs:
   # ---------------------------------------------------------------------------
   client-build:
     name: Client build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -109,9 +109,9 @@ jobs:
   # ---------------------------------------------------------------------------
   trivy:
     name: Trivy (vulns / secrets / IaC)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
@@ -129,13 +129,13 @@ jobs:
   # ---------------------------------------------------------------------------
   docker-scan:
     name: Docker build + image scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       SERVER_IMAGE: post-api-server:${{ github.sha }}
       CLIENT_IMAGE: post-api-client:${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check Snyk token
         id: snyk
@@ -190,11 +190,11 @@ jobs:
   # ---------------------------------------------------------------------------
   snyk:
     name: Snyk (deps / IaC)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check Snyk token
         id: snyk
@@ -206,7 +206,7 @@ jobs:
             echo "::warning::SNYK_TOKEN not set - skipping Snyk scans"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.snyk.outputs.enabled == 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -238,12 +238,12 @@ jobs:
   # ---------------------------------------------------------------------------
   sonar:
     name: SonarQube analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history for blame / new-code detection
 
