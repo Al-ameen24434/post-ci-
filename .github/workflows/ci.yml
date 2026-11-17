@@ -11,6 +11,9 @@ on:
 #   SNYK_TOKEN      - https://snyk.io  (dependency, Docker and IaC scans)
 #   SONAR_TOKEN     - SonarQube/SonarCloud token (static analysis)
 #   SONAR_HOST_URL  - https://sonarcloud.io or your SonarQube server URL
+#   DOCKERHUB_TOKEN - Docker Hub personal access token (image push; skip if unset)
+# Required repository variable:
+#   DOCKERHUB_USERNAME - Docker Hub user/org (image push; skip if unset)
 #
 # Security checks in this workflow:
 #   - npm audit            (dependency vulnerabilities, server + client)
@@ -27,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "24"
+  NODE_VERSION: "26"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -35,10 +38,10 @@ jobs:
   # ---------------------------------------------------------------------------
   server-test:
     name: Server tests
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -81,7 +84,7 @@ jobs:
   # ---------------------------------------------------------------------------
   client-build:
     name: Client build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -109,7 +112,7 @@ jobs:
   # ---------------------------------------------------------------------------
   trivy:
     name: Trivy (vulns / secrets / IaC)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -129,7 +132,7 @@ jobs:
   # ---------------------------------------------------------------------------
   docker-scan:
     name: Docker build + image scan
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       SERVER_IMAGE: post-api-server:${{ github.sha }}
@@ -185,12 +188,46 @@ jobs:
           image: ${{ env.CLIENT_IMAGE }}
           args: --severity-threshold=high
 
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Docker Hub credentials not set - skipping image push"
+          fi
+
+      - name: Log in to Docker Hub
+        if: steps.dockerhub.outputs.enabled == 'true' && github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push images to Docker Hub
+        if: steps.dockerhub.outputs.enabled == 'true' && github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: |
+          docker tag "$SERVER_IMAGE" "$DOCKERHUB_USERNAME/post-api-server:${GITHUB_SHA}"
+          docker tag "$SERVER_IMAGE" "$DOCKERHUB_USERNAME/post-api-server:latest"
+          docker push "$DOCKERHUB_USERNAME/post-api-server:${GITHUB_SHA}"
+          docker push "$DOCKERHUB_USERNAME/post-api-server:latest"
+          docker tag "$CLIENT_IMAGE" "$DOCKERHUB_USERNAME/post-api-client:${GITHUB_SHA}"
+          docker tag "$CLIENT_IMAGE" "$DOCKERHUB_USERNAME/post-api-client:latest"
+          docker push "$DOCKERHUB_USERNAME/post-api-client:${GITHUB_SHA}"
+          docker push "$DOCKERHUB_USERNAME/post-api-client:latest"
+
   # ---------------------------------------------------------------------------
   # Snyk: open-source dependencies + Kubernetes IaC (skipped without token)
   # ---------------------------------------------------------------------------
   snyk:
     name: Snyk (deps / IaC)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
@@ -238,7 +275,7 @@ jobs:
   # ---------------------------------------------------------------------------
   sonar:
     name: SonarQube analysis
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
