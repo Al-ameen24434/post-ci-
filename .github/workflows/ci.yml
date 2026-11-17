@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 # Required repository secrets (security jobs skip gracefully when not set):
+#   SNYK_TOKEN      - https://snyk.io  (dependency, Docker and IaC scans)
 #   SONAR_TOKEN     - SonarQube/SonarCloud token (static analysis)
 #   SONAR_HOST_URL  - https://sonarcloud.io or your SonarQube server URL
 #   DOCKERHUB_TOKEN - Docker Hub personal access token (image push; skip if unset)
@@ -18,6 +19,7 @@ on:
 #   - npm audit            (dependency vulnerabilities, server + client)
 #   - Trivy fs             (vulnerabilities, hardcoded secrets, IaC misconfig)
 #   - Trivy image          (OS + library CVEs in built Docker images)
+#   - Snyk                 (dependencies, Docker images, Kubernetes manifests)
 #   - SonarQube/SonarCloud (static code analysis)
 
 permissions:
@@ -128,16 +130,27 @@ jobs:
           ignore-unfixed: true
 
   # ---------------------------------------------------------------------------
-  # Build Docker images once and scan them with Trivy
+  # Build Docker images once, scan them with Trivy and Snyk
   # ---------------------------------------------------------------------------
   docker-scan:
     name: Docker build + image scan
     runs-on: ubuntu-latest
     env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       SERVER_IMAGE: post-api-server:${{ github.sha }}
       CLIENT_IMAGE: post-api-client:${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check Snyk token
+        id: snyk
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SNYK_TOKEN not set - skipping Snyk image scan"
+          fi
 
       - name: Build server image
         run: docker build -t "$SERVER_IMAGE" ./server
@@ -162,6 +175,20 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+      - name: Snyk scan - server image
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/docker@v1.0.0
+        with:
+          image: ${{ env.SERVER_IMAGE }}
+          args: --severity-threshold=high
+
+      - name: Snyk scan - client image
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/docker@v1.0.0
+        with:
+          image: ${{ env.CLIENT_IMAGE }}
+          args: --severity-threshold=high
 
       - name: Check Docker Hub credentials
         id: dockerhub
@@ -196,6 +223,54 @@ jobs:
           docker tag "$CLIENT_IMAGE" "$DOCKERHUB_USERNAME/post-api-client:latest"
           docker push "$DOCKERHUB_USERNAME/post-api-client:${GITHUB_SHA}"
           docker push "$DOCKERHUB_USERNAME/post-api-client:latest"
+
+  # ---------------------------------------------------------------------------
+  # Snyk: open-source dependencies + Kubernetes IaC (skipped without token)
+  # ---------------------------------------------------------------------------
+  snyk:
+    name: Snyk (deps / IaC)
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check Snyk token
+        id: snyk
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SNYK_TOKEN not set - skipping Snyk scans"
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.snyk.outputs.enabled == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies (server)
+        if: steps.snyk.outputs.enabled == 'true'
+        working-directory: server
+        run: npm ci
+
+      - name: Install dependencies (client)
+        if: steps.snyk.outputs.enabled == 'true'
+        working-directory: client
+        run: npm ci
+
+      - name: Snyk dependency scan
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/node@v1.0.0
+        with:
+          args: --all-projects --severity-threshold=high
+
+      - name: Snyk IaC scan (Kubernetes)
+        if: steps.snyk.outputs.enabled == 'true'
+        uses: snyk/actions/iac@v1.0.0
+        with:
+          file: kubernetes-manifest/
 
   # ---------------------------------------------------------------------------
   # SonarQube / SonarCloud static analysis (skipped without token)
