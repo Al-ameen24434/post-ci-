@@ -1,11 +1,13 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { app } from '../app.js';
+import { initDb } from '../db.js';
 
 let server;
 let base;
 
 before(async () => {
+  await initDb();
   server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://localhost:${server.address().port}`;

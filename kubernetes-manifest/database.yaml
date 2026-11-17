@@ -15,9 +15,16 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           ports:
             - containerPort: 5432
           env:
@@ -39,6 +46,10 @@ spec:
           volumeMounts:
             - name: pg-data
               mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /run
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "postgres", "-d", "postapi"]
@@ -53,6 +64,10 @@ spec:
         - name: pg-data
           persistentVolumeClaim:
             claimName: postgres-pvc
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

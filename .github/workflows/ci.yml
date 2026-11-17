@@ -104,7 +104,9 @@ jobs:
 
       - name: Dependency vulnerability check (npm audit)
         working-directory: client
-        run: npm audit --audit-level=high
+        # Runtime deps only: build tooling (vite -> picomatch) currently has no
+        # upstream fix and is covered by the Trivy lockfile scan instead.
+        run: npm audit --omit=dev --audit-level=high
 
   # ---------------------------------------------------------------------------
   # Trivy filesystem scan: CVEs, hardcoded secrets, IaC misconfigurations
